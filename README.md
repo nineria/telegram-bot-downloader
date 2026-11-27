@@ -34,7 +34,14 @@ go build -o macdrop . && ./macdrop
 ```
 `LOCAL_API_ROOT` must be the host folder you mount at `/var/lib/telegram-bot-api` (the bot maps the server's file paths from that fixed location). `DOWNLOAD_DIR` can be on another disk.
 
+**Windows (PowerShell):** set the variables with `$env:TELEGRAM_API_ID="..."`, use a Windows path such as `C:\tg-data` for `LOCAL_API_ROOT`, and write the volume as `-v "${env:LOCAL_API_ROOT}:/var/lib/telegram-bot-api"`. Build with `go build -o macdrop.exe .` and run `.\macdrop.exe`.
+
 Export the variables from `.env` (for example `set -a; . ./.env; set +a`) before the `docker run` commands. The bot itself reads `.env` from the working directory.
+
+## Platforms
+- **macOS, Windows, Linux:** the Go code builds and its tests run on all three (CI covers Linux, macOS and Windows). File names are cleaned of characters Windows forbids (`: ? * " < > | \`), so a name may differ slightly from the original.
+- **Linux:** the Bot API container writes files as its own user, so the bot must be allowed to read and move them from `LOCAL_API_ROOT` (for example run the bot as root or add its user to the right group). This is untested.
+- `status.sh` needs `sh` and `python3`, so it works on macOS and Linux only. On Windows read `macdrop.log`.
 
 ## Usage
 - Forward any files (photos, videos, documents, audio) to the bot. Only `TELEGRAM_OWNER_ID` is served; everyone else is ignored.
