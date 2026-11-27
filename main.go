@@ -586,7 +586,12 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	conn, err := inngestgo.Connect(ctx, inngestgo.ConnectOpts{Apps: []inngestgo.Client{client}, MaxWorkerConcurrency: new(int64(8))})
+	// The Inngest server advertises its gateway as localhost; inside Docker it is another host (INNGEST_GATEWAY_HOST=inngest:8289).
+	var rewrite func(url.URL) (url.URL, error)
+	if h := os.Getenv("INNGEST_GATEWAY_HOST"); h != "" {
+		rewrite = func(u url.URL) (url.URL, error) { u.Host = h; return u, nil }
+	}
+	conn, err := inngestgo.Connect(ctx, inngestgo.ConnectOpts{Apps: []inngestgo.Client{client}, MaxWorkerConcurrency: new(int64(8)), RewriteGatewayEndpoint: rewrite})
 	if err != nil {
 		log.Fatal("inngest connect: ", err)
 	}
