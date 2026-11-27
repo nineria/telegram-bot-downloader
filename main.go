@@ -95,6 +95,10 @@ var (
 	active   int
 	baseline int64
 	expected int64
+	// shortcut: /status counts only this session; jobs Inngest re-runs after a restart show once they start.
+	waiting     = map[int]string{} // queued, not started
+	downloading = map[int]string{} // by message_id
+	doneCount   int
 )
 
 const stateFile = "failed.json"
@@ -180,6 +184,26 @@ func edit(chat int64, id int, text string) {
 	api("editMessageText", url.Values{"chat_id": {strconv.FormatInt(chat, 10)}, "message_id": {strconv.Itoa(id)}, "text": {text}}, nil)
 }
 
+// statusText summarises the queue for the /status command.
+func statusText() string {
+	mu.Lock()
+	defer mu.Unlock()
+	names := func(m map[int]string) string {
+		ids := make([]int, 0, len(m))
+		for id := range m {
+			ids = append(ids, id)
+		}
+		sort.Ints(ids)
+		var b strings.Builder
+		for _, id := range ids {
+			b.WriteString("\n  • " + m[id])
+		}
+		return b.String()
+	}
+	return fmt.Sprintf("📊 Status\n⬇️ downloading: %d%s\n⏳ waiting: %d%s\n❌ failed: %d (reply /retry)\n✅ done since start: %d",
+		len(downloading), names(downloading), len(waiting), names(waiting), len(failed), doneCount)
+}
+
 func human(n int64) string {
 	switch {
 	case n >= 1<<30:
@@ -246,6 +270,9 @@ func enqueue(m *message, a *media, id string) {
 		mu.Unlock()
 		return
 	}
+	mu.Lock()
+	waiting[m.MessageID] = fileName(a)
+	mu.Unlock()
 	log.Printf("queued msg=%d name=%q size=%d", m.MessageID, a.FileName, a.FileSize)
 }
 
@@ -271,6 +298,8 @@ func fetch(e fileEvent) (string, error) {
 	}
 	active++
 	expected += a.FileSize
+	delete(waiting, m.MessageID)
+	downloading[m.MessageID] = fileName(a)
 	mu.Unlock()
 	done := make(chan struct{})
 	defer func() {
@@ -278,6 +307,7 @@ func fetch(e fileEvent) (string, error) {
 		mu.Lock()
 		active--
 		expected -= a.FileSize
+		delete(downloading, m.MessageID)
 		mu.Unlock()
 	}()
 
@@ -392,6 +422,9 @@ func finish(e fileEvent, src string) (string, error) {
 		}
 	}
 	edit(m.Chat.ID, e.Status, fmt.Sprintf("✅ %s\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 100%%\n📦 %s\n📁 %s", fileName(a), human(a.FileSize), path))
+	mu.Lock()
+	doneCount++
+	mu.Unlock()
 	log.Printf("download OK msg=%d -> %s", m.MessageID, path)
 	return path, nil
 }
@@ -643,6 +676,10 @@ func main() {
 				continue
 			}
 			log.Printf("recv msg=%d group=%q text=%q hasFile=%v reply=%v", m.MessageID, m.GroupID, m.Text, attachment(m) != nil, m.ReplyTo != nil)
+			if m.Text == "/status" {
+				reply(m.Chat.ID, statusText())
+				continue
+			}
 			if m.Text == "/retry" {
 				target := m.ReplyTo
 				if target != nil {
