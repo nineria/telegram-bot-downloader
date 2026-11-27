@@ -324,6 +324,36 @@ func fetch(e fileEvent) (string, error) {
 	return filepath.Join(localRoot, strings.TrimPrefix(f.FilePath, "/var/lib/telegram-bot-api")), nil
 }
 
+// move renames src to dst, or copies and deletes when they are on different disks.
+func move(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := dst + ".part" // a half-copied file never looks finished
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(out, in); err == nil {
+		err = out.Close()
+	} else {
+		out.Close()
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	return os.Remove(src)
+}
+
 // finish moves the downloaded file into place. Safe to repeat: if an earlier attempt already moved it, it is done.
 func finish(e fileEvent, src string) (string, error) {
 	m, a := e.M, e.A
@@ -336,7 +366,7 @@ func finish(e fileEvent, src string) (string, error) {
 		return "", err
 	}
 	if _, err := os.Stat(path); err != nil {
-		if err := os.Rename(src, path); err != nil {
+		if err := move(src, path); err != nil {
 			return "", err
 		}
 	}
@@ -422,8 +452,7 @@ func retryFailed(chat int64, target *message) {
 
 func loadEnv() {
 	dir, _ := os.Executable()
-	home, _ := os.UserHomeDir()
-	for _, p := range []string{".env", filepath.Join(filepath.Dir(dir), ".env"), filepath.Join(home, ".config/inngest/env")} {
+	for _, p := range []string{".env", filepath.Join(filepath.Dir(dir), ".env")} {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			continue
@@ -457,7 +486,7 @@ func main() {
 	}
 	for _, k := range []string{"INNGEST_BASE_URL", "INNGEST_DEV"} {
 		if os.Getenv(k) == "" {
-			log.Fatalf("set %s in .env (shared Inngest settings, ~/.config/inngest/env)", k)
+			log.Fatalf("set %s in .env", k)
 		}
 	}
 	if dest = os.Getenv("DOWNLOAD_DIR"); dest == "" {

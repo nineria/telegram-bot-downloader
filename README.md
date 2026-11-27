@@ -32,9 +32,14 @@ docker run -d --rm --name inngest -p 127.0.0.1:8288:8288 -p 127.0.0.1:8289:8289 
 
 go build -o macdrop . && ./macdrop
 ```
+`LOCAL_API_ROOT` must be the host folder you mount at `/var/lib/telegram-bot-api` (the bot maps the server's file paths from that fixed location). `DOWNLOAD_DIR` can be on another disk.
+
 Export the variables from `.env` (for example `set -a; . ./.env; set +a`) before the `docker run` commands. The bot itself reads `.env` from the working directory.
 
 ## Usage
 - Forward any files (photos, videos, documents, audio) to the bot. Only `TELEGRAM_OWNER_ID` is served; everyone else is ignored.
 - Reply `/retry` to a failed file's status message to retry it, or send `/retry` alone to retry all failed files.
 - `./status.sh` prints a one-line summary: done today, downloading, waiting, failed, free disk.
+
+## License
+MIT, see [LICENSE](LICENSE).
