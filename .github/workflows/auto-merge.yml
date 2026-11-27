@@ -1,0 +1,50 @@
+# Squash-merges your own pull requests into develop once the "ci" workflow has passed on them and they have no conflict,
+# and deletes their branch. A PR whose CI fails, or that conflicts, stays open. Drafts, forks and other people's PRs are
+# never merged. No code from a PR is ever run here.
+name: Auto-merge
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-merge
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge the PRs whose CI passed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          NOREPLY: ${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com # keeps the owner's real email out of public history
+          PRS: ${{ join(github.event.workflow_run.pull_requests.*.number, ' ') }}
+        run: |
+          for pr in $PRS; do
+            # Only the exact commit CI passed on, from this repository, by the owner, aimed at develop. develop goes to main through a pull request you merge yourself.
+            ok=$(gh pr view "$pr" --repo "$REPO" --json isDraft,isCrossRepository,author,headRefOid,baseRefName \
+              --jq '(.isDraft | not) and (.isCrossRepository | not) and .author.login == env.OWNER and .headRefOid == env.SHA and .baseRefName == "develop"')
+            if [ "$ok" != true ]; then echo "PR #$pr is not eligible, left alone"; continue; fi
+            # GitHub works out "mergeable" in the background, so ask a few times.
+            state=UNKNOWN
+            for try in 1 2 3 4 5 6; do
+              state=$(gh pr view "$pr" --repo "$REPO" --json mergeable --jq .mergeable)
+              [ "$state" = UNKNOWN ] || break
+              sleep 5
+            done
+            if [ "$state" = MERGEABLE ]; then
+              gh pr merge "$pr" --repo "$REPO" --squash --delete-branch --match-head-commit "$SHA" --author-email "$NOREPLY" && echo "PR #$pr merged" || echo "PR #$pr could not be merged"
+            else
+              echo "PR #$pr is $state, left alone"
+            fi
+          done
