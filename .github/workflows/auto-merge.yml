@@ -27,7 +27,6 @@ jobs:
           REPO: ${{ github.repository }}
           OWNER: ${{ github.repository_owner }}
           SHA: ${{ github.event.workflow_run.head_sha }}
-          NOREPLY: ${{ github.repository_owner_id }}+${{ github.repository_owner }}@users.noreply.github.com # keeps the owner's real email out of public history
           PRS: ${{ join(github.event.workflow_run.pull_requests.*.number, ' ') }}
         run: |
           for pr in $PRS; do
@@ -43,7 +42,7 @@ jobs:
               sleep 5
             done
             if [ "$state" = MERGEABLE ]; then
-              gh pr merge "$pr" --repo "$REPO" --squash --delete-branch --match-head-commit "$SHA" --author-email "$NOREPLY" && echo "PR #$pr merged" || echo "PR #$pr could not be merged"
+              gh pr merge "$pr" --repo "$REPO" --squash --delete-branch --match-head-commit "$SHA" && echo "PR #$pr merged" || echo "PR #$pr could not be merged"
             else
               echo "PR #$pr is $state, left alone"
             fi

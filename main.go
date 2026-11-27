@@ -1,7 +1,7 @@
 // Saves every file forwarded to the bot into DOWNLOAD_DIR.
 //
 // The poller turns each forwarded file into an Inngest event. An Inngest function does the download:
-// it is queued, limited to `parallel` at a time, retried, and survives restarts (the Inngest server
+// it is queued, limited to PARALLEL_DOWNLOADS at a time, retried, and survives restarts (the Inngest server
 // keeps the queue). Needs the local Bot API server (files over 20MB) and an Inngest server.
 // shortcut: Inngest does not keep forwarding order; add a priority expression if order matters.
 package main
@@ -54,11 +54,11 @@ type message struct {
 }
 
 const (
-	appID      = "macdrop"
-	fnID       = "download-file"
-	eventName  = "tg/file.received"
-	parallel   = 2 // simultaneous downloads (Inngest function concurrency)
-	maxRetries = 8 // per step; each retry re-calls getFile, which resumes the partial file
+	appID         = "macdrop"
+	fnID          = "download-file"
+	eventName     = "tg/file.received"
+	defParallel   = 2 // simultaneous downloads (Inngest function concurrency)
+	defMaxRetries = 8 // per step; each retry re-calls getFile, which resumes the partial file
 )
 
 var (
@@ -324,10 +324,51 @@ func fetch(e fileEvent) (string, error) {
 	return filepath.Join(localRoot, strings.TrimPrefix(f.FilePath, "/var/lib/telegram-bot-api")), nil
 }
 
+// safeName replaces characters Windows forbids in file names, so the same name saves on every OS.
+// shortcut: reserved Windows names (CON, NUL, ...) and trailing dots are not handled; add if anyone hits it.
+func safeName(n string) string {
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`<>:"/\|?*`, r) || r < 32 {
+			return '_'
+		}
+		return r
+	}, n)
+}
+
+// move renames src to dst, or copies and deletes when they are on different disks.
+func move(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	tmp := dst + ".part" // a half-copied file never looks finished
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err = io.Copy(out, in); err == nil {
+		err = out.Close()
+	} else {
+		out.Close()
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	return os.Remove(src)
+}
+
 // finish moves the downloaded file into place. Safe to repeat: if an earlier attempt already moved it, it is done.
 func finish(e fileEvent, src string) (string, error) {
 	m, a := e.M, e.A
-	name := filepath.Base(fileName(a))
+	name := safeName(filepath.Base(fileName(a)))
 	if filepath.Ext(name) == "" {
 		name += filepath.Ext(src) // photos have no name; the server's path carries the real extension (.jpg)
 	}
@@ -336,7 +377,7 @@ func finish(e fileEvent, src string) (string, error) {
 		return "", err
 	}
 	if _, err := os.Stat(path); err != nil {
-		if err := os.Rename(src, path); err != nil {
+		if err := move(src, path); err != nil {
 			return "", err
 		}
 	}
@@ -420,10 +461,20 @@ func retryFailed(chat int64, target *message) {
 	}
 }
 
+// envInt reads a positive integer setting, falling back to def when it is unset or invalid.
+func envInt(key string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil && n > 0 {
+		return n
+	}
+	if v := os.Getenv(key); v != "" {
+		log.Printf("ignoring %s=%q (want a positive number), using %d", key, v, def)
+	}
+	return def
+}
+
 func loadEnv() {
 	dir, _ := os.Executable()
-	home, _ := os.UserHomeDir()
-	for _, p := range []string{".env", filepath.Join(filepath.Dir(dir), ".env"), filepath.Join(home, ".config/inngest/env")} {
+	for _, p := range []string{".env", filepath.Join(filepath.Dir(dir), ".env")} {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			continue
@@ -457,7 +508,7 @@ func main() {
 	}
 	for _, k := range []string{"INNGEST_BASE_URL", "INNGEST_DEV"} {
 		if os.Getenv(k) == "" {
-			log.Fatalf("set %s in .env (shared Inngest settings, ~/.config/inngest/env)", k)
+			log.Fatalf("set %s in .env", k)
 		}
 	}
 	if dest = os.Getenv("DOWNLOAD_DIR"); dest == "" {
@@ -468,6 +519,8 @@ func main() {
 		dest = filepath.Join(home, dest[2:])
 	}
 
+	parallel, maxRetries := envInt("PARALLEL_DOWNLOADS", defParallel), envInt("MAX_RETRIES", defMaxRetries)
+	log.Printf("config: parallel=%d retries=%d dest=%s", parallel, maxRetries, dest)
 	client, err = inngestgo.NewClient(inngestgo.ClientOpts{AppID: appID})
 	if err != nil {
 		log.Fatal(err)

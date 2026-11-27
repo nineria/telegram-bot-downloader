@@ -32,9 +32,35 @@ docker run -d --rm --name inngest -p 127.0.0.1:8288:8288 -p 127.0.0.1:8289:8289 
 
 go build -o macdrop . && ./macdrop
 ```
+`LOCAL_API_ROOT` must be the host folder you mount at `/var/lib/telegram-bot-api` (the bot maps the server's file paths from that fixed location). `DOWNLOAD_DIR` can be on another disk.
+
+**Windows (PowerShell):** set the variables with `$env:TELEGRAM_API_ID="..."`, use a Windows path such as `C:\tg-data` for `LOCAL_API_ROOT`, and write the volume as `-v "${env:LOCAL_API_ROOT}:/var/lib/telegram-bot-api"`. Build with `go build -o macdrop.exe .` and run `.\macdrop.exe`.
+
 Export the variables from `.env` (for example `set -a; . ./.env; set +a`) before the `docker run` commands. The bot itself reads `.env` from the working directory.
+
+## Configuration
+All settings are environment variables, read from the process or from `.env` (see `.env.example`).
+
+| Variable | Required | Default | Meaning |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | yes | | Bot token from @BotFather |
+| `TELEGRAM_OWNER_ID` | yes | | Only this user can use the bot |
+| `TELEGRAM_API_URL` | yes | | Local Bot API server, e.g. `http://127.0.0.1:8081` |
+| `LOCAL_API_ROOT` | yes | | Host folder mounted at `/var/lib/telegram-bot-api` |
+| `INNGEST_DEV`, `INNGEST_BASE_URL` | yes | | Inngest dev server, e.g. `1` and `http://127.0.0.1:8288` |
+| `DOWNLOAD_DIR` | no | `~/Downloads/telegram` | Where files are saved |
+| `PARALLEL_DOWNLOADS` | no | `2` | Files downloaded at the same time |
+| `MAX_RETRIES` | no | `8` | Retries per file before it is marked failed |
+
+## Platforms
+- **macOS, Windows, Linux:** the Go code builds and its tests run on all three (CI covers Linux, macOS and Windows). File names are cleaned of characters Windows forbids (`: ? * " < > | \`), so a name may differ slightly from the original.
+- **Linux:** the Bot API container writes files as its own user, so the bot must be allowed to read and move them from `LOCAL_API_ROOT` (for example run the bot as root or add its user to the right group). This is untested.
+- `status.sh` needs `sh` and `python3`, so it works on macOS and Linux only. On Windows read `macdrop.log`.
 
 ## Usage
 - Forward any files (photos, videos, documents, audio) to the bot. Only `TELEGRAM_OWNER_ID` is served; everyone else is ignored.
 - Reply `/retry` to a failed file's status message to retry it, or send `/retry` alone to retry all failed files.
 - `./status.sh` prints a one-line summary: done today, downloading, waiting, failed, free disk.
+
+## License
+MIT, see [LICENSE](LICENSE).
