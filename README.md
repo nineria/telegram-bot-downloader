@@ -16,7 +16,15 @@ Forward files to the bot, and it replies with a live progress message per file (
 - Docker (for the Bot API server and the Inngest dev server)
 - A bot token from [@BotFather](https://t.me/BotFather) and an API ID/hash from <https://my.telegram.org>
 
-## Setup
+## Quick start (Docker Compose)
+Runs the bot, the local Bot API server and Inngest together. Needs Docker only.
+```sh
+cp .env.example .env   # fill in the Telegram values (token, owner ID, API ID/hash)
+docker compose up -d --build
+```
+Files are saved to `./downloads` (set `DOWNLOAD_DIR` in `.env` to use another host folder). The Inngest dashboard is at <http://127.0.0.1:8288> (`INNGEST_PORT` changes it). Logs: `docker compose logs -f macdrop`.
+
+## Manual setup (without Compose)
 ```sh
 cp .env.example .env   # fill it in
 
@@ -49,6 +57,7 @@ All settings are environment variables, read from the process or from `.env` (se
 | `TELEGRAM_API_URL` | yes | | Local Bot API server, e.g. `http://127.0.0.1:8081` |
 | `LOCAL_API_ROOT` | yes | | Host folder mounted at `/var/lib/telegram-bot-api` |
 | `INNGEST_DEV`, `INNGEST_BASE_URL` | yes | | Inngest dev server, e.g. `1` and `http://127.0.0.1:8288` |
+| `INNGEST_GATEWAY_HOST` | no | | Inngest connect gateway as `host:port`, only when it is not on localhost (set by Compose) |
 | `DOWNLOAD_DIR` | no | `~/Downloads/telegram` | Where files are saved |
 | `PARALLEL_DOWNLOADS` | no | `2` | Files downloaded at the same time |
 | `MAX_RETRIES` | no | `8` | Retries per file before it is marked failed |

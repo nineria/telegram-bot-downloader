@@ -1,0 +1,48 @@
+# Runs the bot, the local Telegram Bot API server and Inngest together:
+#   cp .env.example .env   # fill in the Telegram values
+#   docker compose up -d --build
+# Files are saved to ./downloads (set DOWNLOAD_DIR in .env to change the host folder).
+services:
+  tgapi:
+    image: aiogram/telegram-bot-api:latest
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in .env}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in .env}
+      TELEGRAM_LOCAL: "1"
+    volumes:
+      - tgdata:/var/lib/telegram-bot-api
+
+  inngest:
+    image: inngest/inngest:latest
+    restart: unless-stopped
+    command: inngest dev --persist --no-discovery --no-poll
+    ports:
+      - "127.0.0.1:${INNGEST_PORT:-8288}:8288" # dashboard, local only
+    volumes:
+      - inngest:/.inngest
+
+  macdrop:
+    build: .
+    restart: unless-stopped
+    depends_on: [tgapi, inngest]
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in .env}
+      TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:?set TELEGRAM_OWNER_ID in .env}
+      TELEGRAM_API_URL: http://tgapi:8081
+      LOCAL_API_ROOT: /var/lib/telegram-bot-api
+      INNGEST_DEV: "1"
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_GATEWAY_HOST: inngest:8289
+      DOWNLOAD_DIR: /downloads
+      PARALLEL_DOWNLOADS: ${PARALLEL_DOWNLOADS:-2}
+      MAX_RETRIES: ${MAX_RETRIES:-8}
+    volumes:
+      - tgdata:/var/lib/telegram-bot-api
+      - ${DOWNLOAD_DIR:-./downloads}:/downloads
+      - state:/data # failed.json and macdrop.log
+
+volumes:
+  tgdata:
+  inngest:
+  state:
