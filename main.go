@@ -34,6 +34,7 @@ import (
 
 type media struct {
 	FileID   string `json:"file_id"`
+	UniqueID string `json:"file_unique_id"` // stable across forwards; used to skip duplicates
 	FileName string `json:"file_name"`
 	FileSize int64  `json:"file_size"`
 }
@@ -89,8 +90,9 @@ type pendingTask struct {
 
 var (
 	mu     sync.Mutex
-	failed = map[int]job{}      // by message_id
-	origin = map[int]*message{} // bot status message_id -> the file's message
+	failed = map[int]job{}       // by message_id
+	done   = map[string]string{} // file_unique_id -> saved path, so a re-forwarded file is skipped
+	origin = map[int]*message{}  // bot status message_id -> the file's message
 	// shortcut: progress is read from the local server's temp dir, so parallel downloads share one percentage.
 	active   int
 	baseline int64
@@ -108,7 +110,8 @@ func persist() {
 	b, _ := json.Marshal(struct {
 		Failed map[int]job
 		Origin map[int]*message
-	}{failed, origin})
+		Done   map[string]string
+	}{failed, origin, done})
 	os.WriteFile(stateFile, b, 0o600)
 }
 
@@ -120,6 +123,7 @@ func loadState() (pending map[int]pendingTask) {
 	var st struct {
 		Failed  map[int]job
 		Origin  map[int]*message
+		Done    map[string]string
 		Pending map[int]pendingTask
 	}
 	if json.Unmarshal(b, &st) == nil {
@@ -128,6 +132,9 @@ func loadState() (pending map[int]pendingTask) {
 		}
 		if st.Origin != nil {
 			origin = st.Origin
+		}
+		if st.Done != nil {
+			done = st.Done
 		}
 	}
 	return st.Pending
@@ -256,9 +263,28 @@ func tempBytes() (n int64) {
 	return n
 }
 
+// alreadyHave reports the saved path of a file with the same Telegram unique ID, if it is still on disk.
+func alreadyHave(a *media) (string, bool) {
+	if a.UniqueID == "" {
+		return "", false
+	}
+	mu.Lock()
+	p := done[a.UniqueID]
+	mu.Unlock()
+	if p == "" {
+		return "", false
+	}
+	_, err := os.Stat(p)
+	return p, err == nil
+}
+
 // enqueue posts the "queued" message and hands the file to Inngest. id is the event ID, which
 // Inngest uses to drop duplicates; a retry passes a fresh one.
 func enqueue(m *message, a *media, id string) {
+	if p, ok := alreadyHave(a); ok {
+		reply(m.Chat.ID, "⏭ Already downloaded, skipped:\n"+p+"\n(delete that file to download it again)")
+		return
+	}
 	status := reply(m.Chat.ID, fmt.Sprintf("⏳ %s\n%s · queued", fileName(a), human(a.FileSize)))
 	if err := send(m, a, status, id); err != nil {
 		log.Printf("queue FAILED msg=%d: %v", m.MessageID, err)
@@ -424,6 +450,10 @@ func finish(e fileEvent, src string) (string, error) {
 	edit(m.Chat.ID, e.Status, fmt.Sprintf("✅ %s\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 100%%\n📦 %s\n📁 %s", fileName(a), human(a.FileSize), path))
 	mu.Lock()
 	doneCount++
+	if a.UniqueID != "" {
+		done[a.UniqueID] = path
+		persist()
+	}
 	mu.Unlock()
 	log.Printf("download OK msg=%d -> %s", m.MessageID, path)
 	return path, nil

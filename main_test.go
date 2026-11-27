@@ -60,3 +60,19 @@ func TestStatusText(t *testing.T) {
 		}
 	}
 }
+
+func TestAlreadyHave(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "f.mp4")
+	os.WriteFile(p, []byte("x"), 0o600)
+	mu.Lock()
+	done = map[string]string{"u1": p, "u2": filepath.Join(t.TempDir(), "gone.mp4")}
+	mu.Unlock()
+	if got, ok := alreadyHave(&media{UniqueID: "u1"}); !ok || got != p {
+		t.Errorf("u1: got %q %v", got, ok)
+	}
+	for _, id := range []string{"u2", "unknown", ""} { // file deleted, never seen, no id (old events)
+		if _, ok := alreadyHave(&media{UniqueID: id}); ok {
+			t.Errorf("%q should not count as downloaded", id)
+		}
+	}
+}
