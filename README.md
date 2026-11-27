@@ -72,6 +72,7 @@ All settings are environment variables, read from the process or from `.env` (se
 
 ## Usage
 - Forward any files (photos, videos, documents, audio) to the bot. Only `TELEGRAM_OWNER_ID` is served; everyone else is ignored.
+- A file you already downloaded (same Telegram file) is skipped with a note; delete the saved file to download it again.
 - Reply `/retry` to a failed file's status message to retry it, or send `/retry` alone to retry all failed files.
 - Send `/status` to see what is downloading, waiting and failed (counts cover this run of the bot).
 - `./status.sh` prints a one-line summary: done today, downloading, waiting, failed, free disk.
