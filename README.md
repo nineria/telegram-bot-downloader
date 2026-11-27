@@ -9,6 +9,7 @@ Forward files to the bot, and it replies with a live progress message per file (
 - An Inngest function downloads it: at most 2 at a time, up to 8 retries per file, and the queue survives restarts.
 - Plain Telegram bots can only fetch 20 MB. A **local Bot API server** lifts that limit, so the bot asks it to download the file and then moves the result into place.
 - If the Inngest connection stays down for over 2 minutes, the bot exits so a process supervisor (launchd, systemd, Docker restart policy) can restart it.
+- A health check sends a ping event every minute. If none is handled for 5 minutes (the connection looks up but Inngest runs nothing), the bot exits for a restart too.
 
 ## Requirements
 - Go (see `go.mod`)

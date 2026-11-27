@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -57,8 +58,9 @@ const (
 	appID         = "macdrop"
 	fnID          = "download-file"
 	eventName     = "tg/file.received"
-	defParallel   = 2 // simultaneous downloads (Inngest function concurrency)
-	defMaxRetries = 8 // per step; each retry re-calls getFile, which resumes the partial file
+	pingEvent     = "macdrop/ping" // health check: proves Inngest still runs our functions
+	defParallel   = 2              // simultaneous downloads (Inngest function concurrency)
+	defMaxRetries = 8              // per step; each retry re-calls getFile, which resumes the partial file
 )
 
 var (
@@ -128,6 +130,14 @@ func loadState() (pending map[int]pendingTask) {
 }
 
 var errNet = errors.New("network error")
+
+// lastPong is when the worker last handled a health-check event (unix nanos).
+var lastPong atomic.Int64
+
+func pong(ctx context.Context, in inngestgo.Input[struct{}]) (any, error) {
+	lastPong.Store(time.Now().UnixNano())
+	return nil, nil
+}
 
 func api(method string, params url.Values, out any) (rerr error) {
 	start := time.Now()
@@ -537,6 +547,10 @@ func main() {
 			inngestgo.StrPtr(fmt.Sprintf("event.data.function_id == '%s-%s'", appID, fnID))), onFailure); err != nil {
 		log.Fatal(err)
 	}
+	if _, err = inngestgo.CreateFunction(client, inngestgo.FunctionOpts{ID: "health-ping", Retries: inngestgo.IntPtr(0)},
+		inngestgo.EventTrigger(pingEvent, nil), pong); err != nil {
+		log.Fatal(err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	conn, err := inngestgo.Connect(ctx, inngestgo.ConnectOpts{Apps: []inngestgo.Client{client}, MaxWorkerConcurrency: new(int64(8))})
@@ -560,6 +574,22 @@ func main() {
 				downSince = time.Now()
 			case time.Since(downSince) > 2*time.Minute:
 				log.Fatalf("inngest connection %s for over 2m, exiting to restart", st)
+			}
+		}
+	}()
+	// A connection can look healthy while Inngest no longer runs our functions (e.g. after the Inngest server
+	// restarted). Send a ping event every minute; if none is handled for 5 minutes, exit so we get restarted.
+	lastPong.Store(time.Now().UnixNano())
+	go func() {
+		for range time.Tick(time.Minute) {
+			pctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, err := client.Send(pctx, inngestgo.Event{Name: pingEvent})
+			cancel()
+			if err != nil {
+				log.Printf("health ping not sent: %v", err)
+			}
+			if idle := time.Since(time.Unix(0, lastPong.Load())); idle > 5*time.Minute {
+				log.Fatalf("no health ping handled for %s, exiting to restart", idle.Round(time.Second))
 			}
 		}
 	}()
