@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,21 @@ func TestEnvInt(t *testing.T) {
 		t.Setenv("X_N", bad)
 		if envInt("X_N", 2) != 2 {
 			t.Fatalf("%q should fall back to 2", bad)
+		}
+	}
+}
+
+func TestStatusText(t *testing.T) {
+	mu.Lock()
+	downloading = map[int]string{1: "a.mp4"}
+	waiting = map[int]string{2: "b.mp4", 3: "c.mp4"}
+	failed = map[int]job{}
+	doneCount = 4
+	mu.Unlock()
+	got := statusText()
+	for _, want := range []string{"downloading: 1", "• a.mp4", "waiting: 2", "• b.mp4", "failed: 0", "done since start: 4"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status missing %q in:\n%s", want, got)
 		}
 	}
 }
