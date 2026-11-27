@@ -23,3 +23,11 @@ func TestMove(t *testing.T) {
 		t.Fatal("want error for missing src")
 	}
 }
+
+func TestSafeName(t *testing.T) {
+	for in, want := range map[string]string{"a:b?.mp4": "a_b_.mp4", "ok_ไทย.mp4": "ok_ไทย.mp4", "x|y*z": "x_y_z"} {
+		if got := safeName(in); got != want {
+			t.Errorf("safeName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -324,6 +324,17 @@ func fetch(e fileEvent) (string, error) {
 	return filepath.Join(localRoot, strings.TrimPrefix(f.FilePath, "/var/lib/telegram-bot-api")), nil
 }
 
+// safeName replaces characters Windows forbids in file names, so the same name saves on every OS.
+// shortcut: reserved Windows names (CON, NUL, ...) and trailing dots are not handled; add if anyone hits it.
+func safeName(n string) string {
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`<>:"/\|?*`, r) || r < 32 {
+			return '_'
+		}
+		return r
+	}, n)
+}
+
 // move renames src to dst, or copies and deletes when they are on different disks.
 func move(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil {
@@ -357,7 +368,7 @@ func move(src, dst string) error {
 // finish moves the downloaded file into place. Safe to repeat: if an earlier attempt already moved it, it is done.
 func finish(e fileEvent, src string) (string, error) {
 	m, a := e.M, e.A
-	name := filepath.Base(fileName(a))
+	name := safeName(filepath.Base(fileName(a)))
 	if filepath.Ext(name) == "" {
 		name += filepath.Ext(src) // photos have no name; the server's path carries the real extension (.jpg)
 	}
