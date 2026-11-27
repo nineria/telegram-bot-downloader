@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 
 type media struct {
 	FileID   string `json:"file_id"`
+	UniqueID string `json:"file_unique_id"` // stable across forwards; used to skip duplicates
 	FileName string `json:"file_name"`
 	FileSize int64  `json:"file_size"`
 }
@@ -57,8 +59,9 @@ const (
 	appID         = "macdrop"
 	fnID          = "download-file"
 	eventName     = "tg/file.received"
-	defParallel   = 2 // simultaneous downloads (Inngest function concurrency)
-	defMaxRetries = 8 // per step; each retry re-calls getFile, which resumes the partial file
+	pingEvent     = "macdrop/ping" // health check: proves Inngest still runs our functions
+	defParallel   = 2              // simultaneous downloads (Inngest function concurrency)
+	defMaxRetries = 8              // per step; each retry re-calls getFile, which resumes the partial file
 )
 
 var (
@@ -87,12 +90,17 @@ type pendingTask struct {
 
 var (
 	mu     sync.Mutex
-	failed = map[int]job{}      // by message_id
-	origin = map[int]*message{} // bot status message_id -> the file's message
+	failed = map[int]job{}       // by message_id
+	done   = map[string]string{} // file_unique_id -> saved path, so a re-forwarded file is skipped
+	origin = map[int]*message{}  // bot status message_id -> the file's message
 	// shortcut: progress is read from the local server's temp dir, so parallel downloads share one percentage.
 	active   int
 	baseline int64
 	expected int64
+	// shortcut: /status counts only this session; jobs Inngest re-runs after a restart show once they start.
+	waiting     = map[int]string{} // queued, not started
+	downloading = map[int]string{} // by message_id
+	doneCount   int
 )
 
 const stateFile = "failed.json"
@@ -102,7 +110,8 @@ func persist() {
 	b, _ := json.Marshal(struct {
 		Failed map[int]job
 		Origin map[int]*message
-	}{failed, origin})
+		Done   map[string]string
+	}{failed, origin, done})
 	os.WriteFile(stateFile, b, 0o600)
 }
 
@@ -114,6 +123,7 @@ func loadState() (pending map[int]pendingTask) {
 	var st struct {
 		Failed  map[int]job
 		Origin  map[int]*message
+		Done    map[string]string
 		Pending map[int]pendingTask
 	}
 	if json.Unmarshal(b, &st) == nil {
@@ -123,11 +133,22 @@ func loadState() (pending map[int]pendingTask) {
 		if st.Origin != nil {
 			origin = st.Origin
 		}
+		if st.Done != nil {
+			done = st.Done
+		}
 	}
 	return st.Pending
 }
 
 var errNet = errors.New("network error")
+
+// lastPong is when the worker last handled a health-check event (unix nanos).
+var lastPong atomic.Int64
+
+func pong(ctx context.Context, in inngestgo.Input[struct{}]) (any, error) {
+	lastPong.Store(time.Now().UnixNano())
+	return nil, nil
+}
 
 func api(method string, params url.Values, out any) (rerr error) {
 	start := time.Now()
@@ -168,6 +189,26 @@ func reply(chat int64, text string) int {
 
 func edit(chat int64, id int, text string) {
 	api("editMessageText", url.Values{"chat_id": {strconv.FormatInt(chat, 10)}, "message_id": {strconv.Itoa(id)}, "text": {text}}, nil)
+}
+
+// statusText summarises the queue for the /status command.
+func statusText() string {
+	mu.Lock()
+	defer mu.Unlock()
+	names := func(m map[int]string) string {
+		ids := make([]int, 0, len(m))
+		for id := range m {
+			ids = append(ids, id)
+		}
+		sort.Ints(ids)
+		var b strings.Builder
+		for _, id := range ids {
+			b.WriteString("\n  • " + m[id])
+		}
+		return b.String()
+	}
+	return fmt.Sprintf("📊 Status\n⬇️ downloading: %d%s\n⏳ waiting: %d%s\n❌ failed: %d (reply /retry)\n✅ done since start: %d",
+		len(downloading), names(downloading), len(waiting), names(waiting), len(failed), doneCount)
 }
 
 func human(n int64) string {
@@ -222,9 +263,28 @@ func tempBytes() (n int64) {
 	return n
 }
 
+// alreadyHave reports the saved path of a file with the same Telegram unique ID, if it is still on disk.
+func alreadyHave(a *media) (string, bool) {
+	if a.UniqueID == "" {
+		return "", false
+	}
+	mu.Lock()
+	p := done[a.UniqueID]
+	mu.Unlock()
+	if p == "" {
+		return "", false
+	}
+	_, err := os.Stat(p)
+	return p, err == nil
+}
+
 // enqueue posts the "queued" message and hands the file to Inngest. id is the event ID, which
 // Inngest uses to drop duplicates; a retry passes a fresh one.
 func enqueue(m *message, a *media, id string) {
+	if p, ok := alreadyHave(a); ok {
+		reply(m.Chat.ID, "⏭ Already downloaded, skipped:\n"+p+"\n(delete that file to download it again)")
+		return
+	}
 	status := reply(m.Chat.ID, fmt.Sprintf("⏳ %s\n%s · queued", fileName(a), human(a.FileSize)))
 	if err := send(m, a, status, id); err != nil {
 		log.Printf("queue FAILED msg=%d: %v", m.MessageID, err)
@@ -236,6 +296,9 @@ func enqueue(m *message, a *media, id string) {
 		mu.Unlock()
 		return
 	}
+	mu.Lock()
+	waiting[m.MessageID] = fileName(a)
+	mu.Unlock()
 	log.Printf("queued msg=%d name=%q size=%d", m.MessageID, a.FileName, a.FileSize)
 }
 
@@ -261,6 +324,8 @@ func fetch(e fileEvent) (string, error) {
 	}
 	active++
 	expected += a.FileSize
+	delete(waiting, m.MessageID)
+	downloading[m.MessageID] = fileName(a)
 	mu.Unlock()
 	done := make(chan struct{})
 	defer func() {
@@ -268,6 +333,7 @@ func fetch(e fileEvent) (string, error) {
 		mu.Lock()
 		active--
 		expected -= a.FileSize
+		delete(downloading, m.MessageID)
 		mu.Unlock()
 	}()
 
@@ -382,6 +448,13 @@ func finish(e fileEvent, src string) (string, error) {
 		}
 	}
 	edit(m.Chat.ID, e.Status, fmt.Sprintf("✅ %s\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩 100%%\n📦 %s\n📁 %s", fileName(a), human(a.FileSize), path))
+	mu.Lock()
+	doneCount++
+	if a.UniqueID != "" {
+		done[a.UniqueID] = path
+		persist()
+	}
+	mu.Unlock()
 	log.Printf("download OK msg=%d -> %s", m.MessageID, path)
 	return path, nil
 }
@@ -537,9 +610,18 @@ func main() {
 			inngestgo.StrPtr(fmt.Sprintf("event.data.function_id == '%s-%s'", appID, fnID))), onFailure); err != nil {
 		log.Fatal(err)
 	}
+	if _, err = inngestgo.CreateFunction(client, inngestgo.FunctionOpts{ID: "health-ping", Retries: inngestgo.IntPtr(0)},
+		inngestgo.EventTrigger(pingEvent, nil), pong); err != nil {
+		log.Fatal(err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	conn, err := inngestgo.Connect(ctx, inngestgo.ConnectOpts{Apps: []inngestgo.Client{client}, MaxWorkerConcurrency: new(int64(8))})
+	// The Inngest server advertises its gateway as localhost; inside Docker it is another host (INNGEST_GATEWAY_HOST=inngest:8289).
+	var rewrite func(url.URL) (url.URL, error)
+	if h := os.Getenv("INNGEST_GATEWAY_HOST"); h != "" {
+		rewrite = func(u url.URL) (url.URL, error) { u.Host = h; return u, nil }
+	}
+	conn, err := inngestgo.Connect(ctx, inngestgo.ConnectOpts{Apps: []inngestgo.Client{client}, MaxWorkerConcurrency: new(int64(8)), RewriteGatewayEndpoint: rewrite})
 	if err != nil {
 		log.Fatal("inngest connect: ", err)
 	}
@@ -560,6 +642,22 @@ func main() {
 				downSince = time.Now()
 			case time.Since(downSince) > 2*time.Minute:
 				log.Fatalf("inngest connection %s for over 2m, exiting to restart", st)
+			}
+		}
+	}()
+	// A connection can look healthy while Inngest no longer runs our functions (e.g. after the Inngest server
+	// restarted). Send a ping event every minute; if none is handled for 5 minutes, exit so we get restarted.
+	lastPong.Store(time.Now().UnixNano())
+	go func() {
+		for range time.Tick(time.Minute) {
+			pctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			_, err := client.Send(pctx, inngestgo.Event{Name: pingEvent})
+			cancel()
+			if err != nil {
+				log.Printf("health ping not sent: %v", err)
+			}
+			if idle := time.Since(time.Unix(0, lastPong.Load())); idle > 5*time.Minute {
+				log.Fatalf("no health ping handled for %s, exiting to restart", idle.Round(time.Second))
 			}
 		}
 	}()
@@ -613,6 +711,10 @@ func main() {
 				continue
 			}
 			log.Printf("recv msg=%d group=%q text=%q hasFile=%v reply=%v", m.MessageID, m.GroupID, m.Text, attachment(m) != nil, m.ReplyTo != nil)
+			if m.Text == "/status" {
+				reply(m.Chat.ID, statusText())
+				continue
+			}
 			if m.Text == "/retry" {
 				target := m.ReplyTo
 				if target != nil {

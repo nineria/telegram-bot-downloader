@@ -9,13 +9,22 @@ Forward files to the bot, and it replies with a live progress message per file (
 - An Inngest function downloads it: at most 2 at a time, up to 8 retries per file, and the queue survives restarts.
 - Plain Telegram bots can only fetch 20 MB. A **local Bot API server** lifts that limit, so the bot asks it to download the file and then moves the result into place.
 - If the Inngest connection stays down for over 2 minutes, the bot exits so a process supervisor (launchd, systemd, Docker restart policy) can restart it.
+- A health check sends a ping event every minute. If none is handled for 5 minutes (the connection looks up but Inngest runs nothing), the bot exits for a restart too.
 
 ## Requirements
 - Go (see `go.mod`)
 - Docker (for the Bot API server and the Inngest dev server)
 - A bot token from [@BotFather](https://t.me/BotFather) and an API ID/hash from <https://my.telegram.org>
 
-## Setup
+## Quick start (Docker Compose)
+Runs the bot, the local Bot API server and Inngest together. Needs Docker only.
+```sh
+cp .env.example .env   # fill in the Telegram values (token, owner ID, API ID/hash)
+docker compose up -d --build
+```
+Files are saved to `./downloads` (set `DOWNLOAD_DIR` in `.env` to use another host folder). The Inngest dashboard is at <http://127.0.0.1:8288> (`INNGEST_PORT` changes it). Logs: `docker compose logs -f macdrop`.
+
+## Manual setup (without Compose)
 ```sh
 cp .env.example .env   # fill it in
 
@@ -38,6 +47,9 @@ go build -o macdrop . && ./macdrop
 
 Export the variables from `.env` (for example `set -a; . ./.env; set +a`) before the `docker run` commands. The bot itself reads `.env` from the working directory.
 
+## Releases
+Prebuilt binaries for Linux, macOS and Windows are on the [Releases](../../releases) page. To publish one, tag `main` with a version, for example `git tag v0.1.0 && git push origin v0.1.0`.
+
 ## Configuration
 All settings are environment variables, read from the process or from `.env` (see `.env.example`).
 
@@ -48,6 +60,7 @@ All settings are environment variables, read from the process or from `.env` (se
 | `TELEGRAM_API_URL` | yes | | Local Bot API server, e.g. `http://127.0.0.1:8081` |
 | `LOCAL_API_ROOT` | yes | | Host folder mounted at `/var/lib/telegram-bot-api` |
 | `INNGEST_DEV`, `INNGEST_BASE_URL` | yes | | Inngest dev server, e.g. `1` and `http://127.0.0.1:8288` |
+| `INNGEST_GATEWAY_HOST` | no | | Inngest connect gateway as `host:port`, only when it is not on localhost (set by Compose) |
 | `DOWNLOAD_DIR` | no | `~/Downloads/telegram` | Where files are saved |
 | `PARALLEL_DOWNLOADS` | no | `2` | Files downloaded at the same time |
 | `MAX_RETRIES` | no | `8` | Retries per file before it is marked failed |
@@ -59,7 +72,9 @@ All settings are environment variables, read from the process or from `.env` (se
 
 ## Usage
 - Forward any files (photos, videos, documents, audio) to the bot. Only `TELEGRAM_OWNER_ID` is served; everyone else is ignored.
+- A file you already downloaded (same Telegram file) is skipped with a note; delete the saved file to download it again.
 - Reply `/retry` to a failed file's status message to retry it, or send `/retry` alone to retry all failed files.
+- Send `/status` to see what is downloading, waiting and failed (counts cover this run of the bot).
 - `./status.sh` prints a one-line summary: done today, downloading, waiting, failed, free disk.
 
 ## License
