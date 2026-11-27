@@ -47,6 +47,9 @@ go build -o macdrop . && ./macdrop
 
 Export the variables from `.env` (for example `set -a; . ./.env; set +a`) before the `docker run` commands. The bot itself reads `.env` from the working directory.
 
+## Releases
+Prebuilt binaries for Linux, macOS and Windows are on the [Releases](../../releases) page. To publish one, tag `main` with a version, for example `git tag v0.1.0 && git push origin v0.1.0`.
+
 ## Configuration
 All settings are environment variables, read from the process or from `.env` (see `.env.example`).
 
