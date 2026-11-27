@@ -31,3 +31,16 @@ func TestSafeName(t *testing.T) {
 		}
 	}
 }
+
+func TestEnvInt(t *testing.T) {
+	t.Setenv("X_N", "5")
+	if envInt("X_N", 2) != 5 {
+		t.Fatal("want 5")
+	}
+	for _, bad := range []string{"", "0", "-3", "abc"} {
+		t.Setenv("X_N", bad)
+		if envInt("X_N", 2) != 2 {
+			t.Fatalf("%q should fall back to 2", bad)
+		}
+	}
+}

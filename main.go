@@ -1,7 +1,7 @@
 // Saves every file forwarded to the bot into DOWNLOAD_DIR.
 //
 // The poller turns each forwarded file into an Inngest event. An Inngest function does the download:
-// it is queued, limited to `parallel` at a time, retried, and survives restarts (the Inngest server
+// it is queued, limited to PARALLEL_DOWNLOADS at a time, retried, and survives restarts (the Inngest server
 // keeps the queue). Needs the local Bot API server (files over 20MB) and an Inngest server.
 // shortcut: Inngest does not keep forwarding order; add a priority expression if order matters.
 package main
@@ -54,11 +54,11 @@ type message struct {
 }
 
 const (
-	appID      = "macdrop"
-	fnID       = "download-file"
-	eventName  = "tg/file.received"
-	parallel   = 2 // simultaneous downloads (Inngest function concurrency)
-	maxRetries = 8 // per step; each retry re-calls getFile, which resumes the partial file
+	appID         = "macdrop"
+	fnID          = "download-file"
+	eventName     = "tg/file.received"
+	defParallel   = 2 // simultaneous downloads (Inngest function concurrency)
+	defMaxRetries = 8 // per step; each retry re-calls getFile, which resumes the partial file
 )
 
 var (
@@ -461,6 +461,17 @@ func retryFailed(chat int64, target *message) {
 	}
 }
 
+// envInt reads a positive integer setting, falling back to def when it is unset or invalid.
+func envInt(key string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(key)); err == nil && n > 0 {
+		return n
+	}
+	if v := os.Getenv(key); v != "" {
+		log.Printf("ignoring %s=%q (want a positive number), using %d", key, v, def)
+	}
+	return def
+}
+
 func loadEnv() {
 	dir, _ := os.Executable()
 	for _, p := range []string{".env", filepath.Join(filepath.Dir(dir), ".env")} {
@@ -508,6 +519,8 @@ func main() {
 		dest = filepath.Join(home, dest[2:])
 	}
 
+	parallel, maxRetries := envInt("PARALLEL_DOWNLOADS", defParallel), envInt("MAX_RETRIES", defMaxRetries)
+	log.Printf("config: parallel=%d retries=%d dest=%s", parallel, maxRetries, dest)
 	client, err = inngestgo.NewClient(inngestgo.ClientOpts{AppID: appID})
 	if err != nil {
 		log.Fatal(err)

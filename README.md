@@ -38,6 +38,20 @@ go build -o macdrop . && ./macdrop
 
 Export the variables from `.env` (for example `set -a; . ./.env; set +a`) before the `docker run` commands. The bot itself reads `.env` from the working directory.
 
+## Configuration
+All settings are environment variables, read from the process or from `.env` (see `.env.example`).
+
+| Variable | Required | Default | Meaning |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | yes | | Bot token from @BotFather |
+| `TELEGRAM_OWNER_ID` | yes | | Only this user can use the bot |
+| `TELEGRAM_API_URL` | yes | | Local Bot API server, e.g. `http://127.0.0.1:8081` |
+| `LOCAL_API_ROOT` | yes | | Host folder mounted at `/var/lib/telegram-bot-api` |
+| `INNGEST_DEV`, `INNGEST_BASE_URL` | yes | | Inngest dev server, e.g. `1` and `http://127.0.0.1:8288` |
+| `DOWNLOAD_DIR` | no | `~/Downloads/telegram` | Where files are saved |
+| `PARALLEL_DOWNLOADS` | no | `2` | Files downloaded at the same time |
+| `MAX_RETRIES` | no | `8` | Retries per file before it is marked failed |
+
 ## Platforms
 - **macOS, Windows, Linux:** the Go code builds and its tests run on all three (CI covers Linux, macOS and Windows). File names are cleaned of characters Windows forbids (`: ? * " < > | \`), so a name may differ slightly from the original.
 - **Linux:** the Bot API container writes files as its own user, so the bot must be allowed to read and move them from `LOCAL_API_ROOT` (for example run the bot as root or add its user to the right group). This is untested.
