@@ -104,8 +104,6 @@ Send `/status` for the whole queue:
 | `/retry` | Retries every failed file |
 | `/retry` as a reply | Retries that file, and its whole album if it has one |
 
-`./status.sh` prints a one-line summary for terminals and dashboards (done today, downloading, waiting, failed, free disk). It needs `sh` and `python3`, so it works on macOS and Linux only.
-
 ## Prerequisites
 
 | Requirement | Minimum | Check | Install |
